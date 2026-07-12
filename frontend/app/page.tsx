@@ -3,7 +3,7 @@
 import { useRef, useState, useCallback, useEffect } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const FRAME_INTERVAL_MS = 900; // how often we sample a frame and call the API
+const FRAME_INTERVAL_MS = 500; // how often we sample a frame and call the API
 
 type Counts = Record<string, number>;
 type Box = { class: string; bbox: [number, number, number, number] };
@@ -107,7 +107,7 @@ export default function Home() {
     setError(null);
     setStatus("connecting");
     try {
-      const res = await fetch(`${API_URL}/session/new`, { method: "POST" });
+      const res = await fetch(`${API_URL}/session/new?missing_threshold=4`, { method: "POST" });
       if (!res.ok) throw new Error("Could not reach backend");
       const data = await res.json();
       sessionIdRef.current = data.session_id;
