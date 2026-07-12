@@ -28,19 +28,25 @@ function CountTile({ label, value, tone }: { label: string; value: number; tone:
   );
 }
 
+type Source = "upload" | "webcam" | null;
+
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [source, setSource] = useState<Source>(null);
   const [running, setRunning] = useState(false);
   const [liveCounts, setLiveCounts] = useState<Counts>({});
   const [soldCounts, setSoldCounts] = useState<Counts>({});
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "connecting" | "watching">("idle");
+
+  const hasFeed = source === "upload" ? !!videoUrl : source === "webcam";
 
   const allClasses = Array.from(new Set([...Object.keys(liveCounts), ...Object.keys(soldCounts)]));
 
@@ -117,6 +123,12 @@ export default function Home() {
     }
   }, [sendFrame]);
 
+  const stopWebcam = useCallback(() => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+  }, []);
+
   const stop = useCallback(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
     videoRef.current?.pause();
@@ -126,21 +138,51 @@ export default function Home() {
     if (sessionId) {
       fetch(`${API_URL}/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
     }
-  }, []);
+    if (source === "webcam") stopWebcam();
+  }, [source, stopWebcam]);
 
   useEffect(() => {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
+      stopWebcam();
     };
-  }, []);
+  }, [stopWebcam]);
+
+  useEffect(() => {
+    if (source === "webcam" && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+    }
+  }, [source]);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    stopWebcam();
+    setSource("upload");
     setVideoUrl(URL.createObjectURL(file));
     setLiveCounts({});
     setSoldCounts({});
   };
+
+  const enableWebcam = useCallback(async () => {
+    setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+      streamRef.current = stream;
+      setVideoUrl(null);
+      setSource("webcam");
+      setLiveCounts({});
+      setSoldCounts({});
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+    } catch (e: any) {
+      setError("Could not access webcam — check browser permissions.");
+    }
+  }, []);
 
   return (
     <main className="min-h-screen bg-ink px-6 py-10 md:px-14">
@@ -153,7 +195,7 @@ export default function Home() {
             Live product counter
           </h1>
           <p className="text-muted mt-2 max-w-md">
-            Upload shelf footage. Items are tallied as sold the moment they leave the frame edge.
+            Point a camera at the shelf, or upload footage. Items are tallied as sold the moment they leave the frame edge.
           </p>
         </div>
         <div className="hidden md:flex items-center gap-2 font-mono text-xs uppercase text-muted">
@@ -169,35 +211,54 @@ export default function Home() {
       <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-8">
         {/* Video panel */}
         <section className="border border-line bg-panel p-4">
-          {videoUrl ? (
+          {hasFeed ? (
             <div className="relative">
               <video
                 ref={videoRef}
-                src={videoUrl}
+                src={source === "upload" ? videoUrl ?? undefined : undefined}
                 muted
-                loop
+                loop={source === "upload"}
+                autoPlay={source === "webcam"}
+                playsInline
                 className="w-full border border-line"
               />
               <canvas
                 ref={overlayRef}
                 className="absolute inset-0 w-full h-full pointer-events-none"
               />
+              {source === "webcam" && (
+                <span className="absolute top-2 right-2 flex items-center gap-1.5 bg-ink/80 px-2 py-1 font-mono text-[10px] uppercase tracking-wide text-sold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-sold animate-pulse" />
+                  Live
+                </span>
+              )}
             </div>
           ) : (
-            <label className="flex flex-col items-center justify-center h-72 border border-dashed border-line cursor-pointer hover:border-signal transition-colors">
-              <span className="font-mono text-sm text-muted uppercase tracking-wide">
-                Click to upload footage
-              </span>
-              <span className="text-xs text-muted mt-1">MP4, MOV, or AVI</span>
-              <input type="file" accept="video/*" className="hidden" onChange={onFileChange} />
-            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 h-72">
+              <label className="flex flex-col items-center justify-center border border-dashed border-line cursor-pointer hover:border-signal transition-colors">
+                <span className="font-mono text-sm text-muted uppercase tracking-wide">
+                  Upload footage
+                </span>
+                <span className="text-xs text-muted mt-1">MP4, MOV, or AVI</span>
+                <input type="file" accept="video/*" className="hidden" onChange={onFileChange} />
+              </label>
+              <button
+                onClick={enableWebcam}
+                className="flex flex-col items-center justify-center border border-dashed border-line hover:border-signal transition-colors"
+              >
+                <span className="font-mono text-sm text-muted uppercase tracking-wide">
+                  Use live camera
+                </span>
+                <span className="text-xs text-muted mt-1">Requires browser permission</span>
+              </button>
+            </div>
           )}
           <canvas ref={canvasRef} className="hidden" />
 
           <div className="flex gap-3 mt-4">
             <button
               onClick={start}
-              disabled={!videoUrl || running}
+              disabled={!hasFeed || running}
               className="flex-1 bg-signal text-ink font-body font-semibold py-2 disabled:opacity-30 disabled:cursor-not-allowed hover:brightness-110 transition"
             >
               Start watching
@@ -210,6 +271,18 @@ export default function Home() {
               Stop
             </button>
           </div>
+          {hasFeed && !running && (
+            <button
+              onClick={() => {
+                stopWebcam();
+                setSource(null);
+                setVideoUrl(null);
+              }}
+              className="mt-3 text-xs font-mono text-muted hover:text-signal uppercase tracking-wide"
+            >
+              ← Switch source
+            </button>
+          )}
 
           {error && (
             <p className="mt-3 text-sm text-sold font-mono">{error}</p>
