@@ -42,12 +42,13 @@ app.add_middleware(
 
 # ---------------- Tracker (same logic as local predict.py) ----------------
 class SimpleIoUTracker:
-    def __init__(self, iou_threshold=0.3, missing_threshold=15, edge_margin=40):
+    def __init__(self, iou_threshold=0.25, missing_threshold=4, edge_margin=60, require_edge=False):
         self.next_id = 0
         self.tracks = {}
         self.iou_threshold = iou_threshold
         self.missing_threshold = missing_threshold
         self.edge_margin = edge_margin
+        self.require_edge = require_edge
         self.sold_counts = defaultdict(int)
         self.frame_idx = 0
 
@@ -95,7 +96,7 @@ class SimpleIoUTracker:
         to_remove = []
         for tid, track in self.tracks.items():
             if self.frame_idx - track["last_seen"] > self.missing_threshold:
-                if self._near_edge(track["bbox"], frame_w, frame_h):
+                if (not self.require_edge) or self._near_edge(track["bbox"], frame_w, frame_h):
                     self.sold_counts[track["class"]] += 1
                 to_remove.append(tid)
         for tid in to_remove:
@@ -157,9 +158,11 @@ class ResetResponse(BaseModel):
 
 
 @app.post("/session/new", response_model=ResetResponse)
-def new_session():
+def new_session(missing_threshold: int = 4, require_edge: bool = False):
     session_id = uuid.uuid4().hex
-    sessions[session_id] = SimpleIoUTracker()
+    sessions[session_id] = SimpleIoUTracker(
+        missing_threshold=missing_threshold, require_edge=require_edge
+    )
     return {"session_id": session_id}
 
 
