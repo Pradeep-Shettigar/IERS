@@ -42,13 +42,16 @@ app.add_middleware(
 
 # ---------------- Tracker (same logic as local predict.py) ----------------
 class SimpleIoUTracker:
-    def __init__(self, iou_threshold=0.25, missing_threshold=4, edge_margin=60, require_edge=False):
+    def __init__(self, iou_threshold=0.25, missing_threshold=4, edge_margin=60,
+                 require_edge=False, floor_class="floor", floor_iou_threshold=0.35):
         self.next_id = 0
         self.tracks = {}
         self.iou_threshold = iou_threshold
         self.missing_threshold = missing_threshold
         self.edge_margin = edge_margin
         self.require_edge = require_edge
+        self.floor_class = floor_class          # class name for "empty space" detections
+        self.floor_iou_threshold = floor_iou_threshold
         self.sold_counts = defaultdict(int)
         self.frame_idx = 0
 
@@ -70,24 +73,36 @@ class SimpleIoUTracker:
                 or x2 > w - self.edge_margin or y2 > h - self.edge_margin)
 
     def update(self, detections, frame_w, frame_h):
-        unmatched = list(range(len(detections)))
-        for tid, track in self.tracks.items():
+        # separate real product detections from "floor/empty" detections
+        product_dets = [d for d in detections if d["class"] != self.floor_class]
+        floor_dets = [d for d in detections if d["class"] == self.floor_class]
+
+        unmatched = list(range(len(product_dets)))
+        for tid, track in list(self.tracks.items()):
             best_iou, best_idx = 0, None
             for di in unmatched:
-                det = detections[di]
+                det = product_dets[di]
                 if det["class"] != track["class"]:
                     continue
                 iou = self._iou(track["bbox"], det["bbox"])
                 if iou > best_iou:
                     best_iou, best_idx = iou, di
             if best_idx is not None and best_iou >= self.iou_threshold:
-                det = detections[best_idx]
+                det = product_dets[best_idx]
                 track["bbox"] = det["bbox"]
                 track["last_seen"] = self.frame_idx
                 unmatched.remove(best_idx)
+            else:
+                # not matched this frame — check if a "floor" detection now covers its old spot,
+                # meaning the product was very likely just removed. Count it sold immediately.
+                for fd in floor_dets:
+                    if self._iou(track["bbox"], fd["bbox"]) >= self.floor_iou_threshold:
+                        self.sold_counts[track["class"]] += 1
+                        del self.tracks[tid]
+                        break
 
         for di in unmatched:
-            det = detections[di]
+            det = product_dets[di]
             self.tracks[self.next_id] = {
                 "class": det["class"], "bbox": det["bbox"], "last_seen": self.frame_idx
             }
